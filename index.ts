@@ -35,13 +35,19 @@ class CellCluster {
     height: number
     grid: Grid
     cached_alive_cells_count: number
+    average_alive_cells_count: number
+    alive_cells_delta: number
+    paused: boolean
 
     constructor(x: number, y: number, width: number, height: number) {
         this.x = x;
         this.y = y;
         this.width = width;
         this.height = height;
-        this.cached_alive_cells_count = 0;
+        this.cached_alive_cells_count = 1;
+        this.average_alive_cells_count = 1;
+        this.alive_cells_delta = 1;
+        this.paused = false;
         this.grid = new Grid(width, height);
     }
 
@@ -50,6 +56,10 @@ class CellCluster {
     }
 
     count_alive_cells() : number {
+        if (this.paused) {
+            return this.cached_alive_cells_count;
+        }
+
         let alive_cells = 0;
         
         for (let cell of this.grid.cells) {
@@ -57,6 +67,10 @@ class CellCluster {
                 alive_cells++;
             }
         }
+
+        let before = this.average_alive_cells_count;
+        this.average_alive_cells_count = Math.round(((this.average_alive_cells_count + alive_cells) / 2) * 100) / 100;
+        this.alive_cells_delta = Math.round((this.average_alive_cells_count - before) * 100) / 100;
 
         this.cached_alive_cells_count = alive_cells;
 
@@ -96,14 +110,14 @@ class Life {
     set_cell(x: number, y: number, value: number) {
         for (let i=0; i < this.clusters.length; i++) {
             let cluster = this.clusters[i];
-            
+
             if (cluster.coords_inside(x, y)) {
                 cluster.set_cell(x, y, value);
                 return;
             }
         }
         
-        let new_cluster = new CellCluster(Math.floor((x / 64)) * 64, (Math.floor(y / 64) * 64), 64, 64);
+        let new_cluster = new CellCluster(Math.floor((x / 32)) * 32, (Math.floor(y / 32) * 32), 32, 32);
 
         new_cluster.set_cell(x, y, value);
 
@@ -174,14 +188,25 @@ class Life {
 
         this.steps += 1;
 
-        if (this.steps % 50 == 0) {
-            for (let i=0; i < this.clusters.length; i++) {
-                let cluster = this.clusters[i];
+        if (this.steps % 100 == 0) {
+            this.optimize();
+        }
+    }
 
-                if (cluster.count_alive_cells() < 1) {
-                    this.clusters.splice(i, 1);
-                    i = 0;
-                }
+    optimize() {
+        for (let i=0; i < this.clusters.length; i++) {
+            let cluster = this.clusters[i];
+            cluster.count_alive_cells();
+
+            if (cluster.cached_alive_cells_count <= 0) {
+                this.clusters.splice(i, 1);
+                i = 0;
+            }
+            else if (cluster.alive_cells_delta == 0) {
+                cluster.paused = true;
+            }
+            else if (cluster.paused && cluster.alive_cells_delta != 0) {
+                cluster.paused = false;
             }
         }
     }
@@ -194,11 +219,15 @@ let life = new Life();
 
 let mouse_x = 0;
 let mouse_y = 0;
-let begin_drag_x = 0;
-let begin_drag_y = 0;
-
 let camera_x = 0;
 let camera_y = 0;
+let camera_zoom = 1;
+let step_zoom = 1;
+let dragging = false;
+let begin_drag_x = 0;
+let begin_drag_y = 0;
+let dragging_x = 0;
+let dragging_y = 0;
 
 let mouse_down = false;
 
@@ -210,23 +239,21 @@ function draw_frame() {
     canvas_ctx.fillStyle = 'black';
     canvas_ctx.fillRect(-half_x, -half_y, half_x * 2, half_y * 2);
 
-    
-
     for (let cluster of life.clusters) {
-        
-        canvas_ctx.strokeStyle = 'yellow';
-        canvas_ctx.strokeRect(camera_x + (cluster.x * 2), camera_y + (cluster.y * 2), cluster.width * 2, cluster.height *2);
-
+        canvas_ctx.strokeStyle = cluster.paused? 'grey' : 'yellow';
+        canvas_ctx.strokeRect(dragging_x + camera_x + (cluster.x * (2 * camera_zoom)), dragging_y + camera_y + (cluster.y * (2 * camera_zoom)), cluster.width * (2 * camera_zoom), cluster.height * (2 * camera_zoom));
+        // canvas_ctx.strokeText(`(${cluster.average_alive_cells_count}; D=${cluster.alive_cells_delta})`, dragging_x + camera_x + (cluster.x * (2 * camera_zoom)), dragging_y + camera_y + (cluster.y * (2 * camera_zoom)))
         let grid = cluster.grid;
+
+        let color = cluster.paused ? 64 : 255;
 
         for (let y=0; y < grid.height; y++) {
             for (let x=0; x < grid.width; x++) {
                 let cell = cluster.grid.get_item(x, y);
-                let color = 128 + (Math.round(cell * 1000) % 127);
-    
+
                 if (cell > 0) {
                     canvas_ctx.fillStyle = `rgb(${color},${color},${color})`;
-                    canvas_ctx.fillRect(camera_x + ((cluster.x + x) * 2), camera_y + ((cluster.y + y) * 2), 2, 2);
+                    canvas_ctx.fillRect(dragging_x + camera_x + ((cluster.x + x) * (2 * camera_zoom)), dragging_y + camera_y + ((cluster.y + y) * (2 * camera_zoom)), (2 * camera_zoom), (2 * camera_zoom));
                 }
             }
         }
@@ -234,14 +261,51 @@ function draw_frame() {
 
     life.step();
 
+    life.set_cell((Math.round(Math.random() * 32) - 16), Math.round((Math.random() * 32) - 16), 1);
+
     return requestAnimationFrame(draw_frame);
 }
 
 draw_frame();
 
+
+
+canvas_element.addEventListener('mousedown', e => {
+    if (!dragging) {
+        dragging = true;
+        begin_drag_x = mouse_x;
+        begin_drag_y = mouse_y;
+        dragging_x = 0;
+        dragging_y = 0;
+    }
+});
+
+canvas_element.addEventListener('mouseup', e => {
+    if (dragging) {
+        dragging = false;
+        camera_x += dragging_x;
+        camera_y += dragging_y;
+        dragging_x = 0;
+        dragging_y = 0;
+    }
+});
+
 canvas_element.addEventListener('mousemove', e => {
-    mouse_x = e.x;
-    mouse_y = e.y;
-    camera_x = mouse_x;
-    camera_y = mouse_y;
+    mouse_x = e.x - half_x;
+    mouse_y = e.y - half_y;
+
+    if (dragging) {
+        dragging_x = mouse_x - begin_drag_x;
+        dragging_y = mouse_y - begin_drag_y;
+    }
+});
+
+canvas_element.addEventListener('wheel', e => {
+    step_zoom += e.deltaY * 0.001;
+
+    if (step_zoom <= 0) {
+        step_zoom = 0.01;
+    }
+
+    camera_zoom = step_zoom;
 });
