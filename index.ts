@@ -112,6 +112,10 @@ class Life {
             let cluster = this.clusters[i];
 
             if (cluster.coords_inside(x, y)) {
+                if (value > 0) {
+                    cluster.paused = false;
+                }
+                
                 cluster.set_cell(x, y, value);
                 return;
             }
